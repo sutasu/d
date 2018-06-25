@@ -1,4 +1,4 @@
-# v1 design considerations.
+# v0 design considerations.
 
 v1 implementation is based on configuration script used by the administrator for initial preparation and bash script managing cloud bursting and data transfers supplied with appropriate parameters from external event trigger.
 
@@ -42,5 +42,12 @@ v1 implementation is based on configuration script used by the administrator for
 ## Cloud unbursting
 
 - use Unisight rule to delete idle nodes
+
+
+# v1 design
+
+Extend UGE to add universal ability for data transfer in both directions which would be interfaced for UGE user with new submit command line options.
+Extend UGE to be able to configure cloud bursting via Unicloud/Tortuga/Navops Launch
+Extend UGE to be able to configure storage on local and cloud parts of the cluster to be used in data exchange
 
 
