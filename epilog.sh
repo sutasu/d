@@ -13,9 +13,9 @@ if [ ! -z "$SGE_DATA_OUT" ]; then
     if [ ! -z "$SGE_DATA_OUT_BACK" ]; then
       if [ "$SGE_DATA_OUT_BACK_STORAGE" == "SCRATCH" ]; then
         RSYNC_PASSWORD=ugersync rsync \
-          --rsync-path="mkdir -p $SCRATCH_ROOT/$SGE_DATA_OUT_BACK && rsync" \
+          --rsync-path="mkdir -p $SCRATCH_ROOT/$SGE_O_LOGNAME/$SGE_DATA_OUT_BACK && rsync" \
           -rtv $SGE_STDERR_PATH $SGE_STDOUT_PATH $SGE_DATA_OUT/* \
-          rsync://ugersync@$RSYNCD_HOST/SCRATCH/$SGE_DATA_OUT_BACK/
+          rsync://ugersync@$RSYNCD_HOST/SCRATCH/$SGE_O_LOGNAME/$SGE_DATA_OUT_BACK/
         ret=$?
       elif [ "$SGE_DATA_OUT_BACK_STORAGE" == "HOME" ]; then
         RSYNC_PASSWORD=ugersync rsync -rtv \
@@ -23,7 +23,7 @@ if [ ! -z "$SGE_DATA_OUT" ]; then
           rsync://ugersync@$RSYNCD_HOST/HOME/$SGE_O_LOGNAME/$SGE_DATA_OUT_BACK/
         ret=$?
       else
-        echo "ERROR"
+        echo "ERROR: unknown storage type: $SGE_DATA_OUT_BACK_STORAGE"
       fi
     else
       RSYNC_PASSWORD=ugersync rsync -rtv \

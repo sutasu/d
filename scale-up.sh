@@ -106,7 +106,11 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
 #for job_id in ${job_ids[@]}; do
 #  jarr=($(qstat -j $job_id | awk -F': ' '/hard resource_list|env_list/ {print $2}'))
   # expects soft resource list to be there (as summlies by qsub-wrapper.sh)
-  jarr=($(qstat -j $job_id | awk -F': ' '/soft resource_list|env_list/ {print $2}'))
+  jarr=($(set -o pipefail; qstat -j $job_id | awk -F': ' '/soft resource_list|env_list/ {print $2}'))
+  if [ $? -ne 0 ]; then
+    echo "ERROR: from qstat for job id: $job_id"
+    continue
+  fi
   resource_list=${jarr[0]}
   env_list=${jarr[1]}
   resource_list_arr=(${resource_list//,/ })
@@ -262,7 +266,7 @@ for ((data_cnt=0; data_cnt<data_total; data_cnt++)) {
 # prepare load sensors and prolog/epilog
 sed "s|%%SGE_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; s|%%SGE_COMPLEX_NAME%%|$LOCAL_PATH_COMPLEX|; s|%%DEPTH%%|1|" $SCRIPT_DIR/load-sensor.sh > /tmp/lls.sh
 chmod a+x /tmp/lls.sh
-sed "s|%%SGE_STORAGE_ROOT%%|$SCRATCH_ROOT|; s|%%SGE_COMPLEX_NAME%%|$SHARED_PATH_COMPLEX|; s|%%DEPTH%%|0|" $SCRIPT_DIR/load-sensor.sh > /tmp/sls.sh
+sed "s|%%SGE_STORAGE_ROOT%%|$SCRATCH_ROOT|; s|%%SGE_COMPLEX_NAME%%|$SHARED_PATH_COMPLEX|; s|%%DEPTH%%|1|" $SCRIPT_DIR/load-sensor.sh > /tmp/sls.sh
 chmod a+x /tmp/sls.sh
 sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" $SCRIPT_DIR/epilog.sh > /tmp/epilog.sh
 chmod a+x /tmp/epilog.sh
@@ -304,7 +308,7 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
       fi
       hf=/tmp/$node
       qconf -sconf $node > $hf
-      echo "load_sensor $LOAD_SENSOR_DIR/lls.sh" >> $hf
+      echo "load_sensor $LOAD_SENSOR_DIR/lls.sh,$LOAD_SENSOR_DIR/sls.sh" >> $hf
       # temporary change load sensor period to short value
       echo "load_report_time 5" >> $hf
       qconf -Mconf $hf

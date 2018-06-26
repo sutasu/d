@@ -6,10 +6,14 @@
 #set -x
 THIS_SCRIPT=$0
 
-#SGE_LOCAL_STORAGE_ROOT=%%EXEC_HOST_LOCAL_DATA_DIR%%
-#SGE_SHARED_STORAGE_ROOT=%%SHARED_DATA_DIR%%
-SGE_LOCAL_STORAGE_ROOT=/tmp/sge_data
-SGE_SHARED_STORAGE_ROOT=/tmp/sge_shared
+# local cluster shared data directory
+SCRATCH_ROOT=%%SCRATCH_ROOT%%
+# remote cluster exec node local data directory
+SGE_LOCAL_STORAGE_ROOT=%%SGE_LOCAL_STORAGE_ROOT%%
+# remote cluster shared directory
+SGE_SHARED_STORAGE_ROOT=%%SGE_SHARED_STORAGE_ROOT%%
+#SGE_LOCAL_STORAGE_ROOT=/tmp/sge_data
+#SGE_SHARED_STORAGE_ROOT=/tmp/sge_shared
 LOCAL_PATH_COMPLEX=path
 SHARED_PATH_COMPLEX=spath
 
@@ -78,7 +82,7 @@ while [ $# -gt 0 ]; do
     ;;
   "-dest")
     shift
-    local_shared="$1"
+    dest_type="$1"
     shift
     ((done++))
     ;;
@@ -116,30 +120,32 @@ if [ -z "$src_path" ]; then
   exit 1
 fi
 
-if [ -z "$local_shared" ]; then
-  local_shared=LOCAL
+if [ -z "$dest_type" ]; then
+  dest_type=LOCAL
 fi
 
-if [ "$local_shared" == "LOCAL" ]; then
+if [ "$dest_type" == "LOCAL" ]; then
   complex=$LOCAL_PATH_COMPLEX
   export SGE_DATA_IN="$SGE_LOCAL_STORAGE_ROOT/$USER/$(echo $src_path | base64)"
-elif [ "$local_shared" == "SCRATCH" ]; then
+elif [ "$dest_type" == "SCRATCH" ]; then
   complex=$SHARED_PATH_COMPLEX
   export SGE_DATA_IN="$SGE_SHARED_STORAGE_ROOT/$USER/$(echo $src_path | base64)"
   SGE_DATA_IN_SRC=$src_path
 else
-  echo "Incorrect -dest parameter: $local_shared. Should be LOCAL or SCRATCH"
+  echo "ERROR: Incorrect -dest parameter: $dest_type. Should be LOCAL or SCRATCH"
   exit 1
 fi
 
 # create output directory and set permissions
-SGE_SHARED_STORAGE_ROOT=/tmp/sge_shared
 if [ "$SGE_DATA_OUT_BACK_STORAGE" == "HOME" ]; then
   mkdir -p ~/$SGE_DATA_OUT_BACK
   chmod a+rwx ~/$SGE_DATA_OUT_BACK
+elif [ "$SGE_DATA_OUT_BACK_STORAGE" == "SCRATCH" ]; then
+  mkdir -p $SCRATCH_ROOT/$USER/$SGE_DATA_OUT_BACK
+  chmod a+rwx $SCRATCH_ROOT/$USER/$SGE_DATA_OUT_BACK
 else
-  mkdir -p $SGE_SHARED_STORAGE_ROOT/$SGE_DATA_OUT_BACK
-  chmod a+rwx $SGE_SHARED_STORAGE_ROOT/$SGE_DATA_OUT_BACK
+  echo "ERROR: unknown storage type: $SGE_DATA_OUT_BACK_STORAGE"
+  exit 1
 fi
 
 # submit job with additional parameters

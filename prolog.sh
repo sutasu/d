@@ -1,7 +1,7 @@
 #/bin/bash
 set -x
 
-SCRATCH_ROOT=%%SCRATCH_ROOT%%
+#SCRATCH_ROOT=%%SCRATCH_ROOT%%
 RSYNCD_HOST=%%RSYNCD_HOST%%
 
 echo "Prolog $(date): begin"

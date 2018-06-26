@@ -6,9 +6,13 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 SGE_USER_HOME=/home/sge
 LOCAL_PATH_COMPLEX=path
-SYNC_BACK_COMPLEX_NAME=sync_back
+SHARED_PATH_COMPLEX=spath
 LOAD_SENSOR_DIR=$SGE_ROOT/setup
+# remote cluster exec node local data directory
 SGE_LOCAL_STORAGE_ROOT=/tmp/sge_data
+# remote cluster shared data directory
+SGE_SHARED_STORAGE_ROOT=/tmp/sge_shared
+# local cluster shared data directory
 SCRATCH_ROOT=/tmp/sge_shared
 RSYNCD_HOST=$(hostname)
 #RSYNCD_HOST=%%RSYNCD_HOST%%
@@ -37,12 +41,14 @@ add_pro_epi_ls() {
   # prepare load sensor
   sed "s|%%SGE_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; s|%%SGE_COMPLEX_NAME%%|$LOCAL_PATH_COMPLEX|" $SCRIPT_DIR/load-sensor.sh > /tmp/lls.sh
   chmod a+x /tmp/lls.sh
+  sed "s|%%SGE_STORAGE_ROOT%%|$SGE_SHARED_STORAGE_ROOT|; s|%%SGE_COMPLEX_NAME%%|$SHARED_PATH_COMPLEX|" $SCRIPT_DIR/load-sensor.sh > /tmp/sls.sh
+  chmod a+x /tmp/sls.sh
   sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" $SCRIPT_DIR/epilog.sh > /tmp/epilog.sh
   chmod a+x /tmp/epilog.sh
   sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" $SCRIPT_DIR/prolog.sh > /tmp/prolog.sh
   chmod a+x /tmp/prolog.sh
   for n in $nodes; do
-    sudo su - sge -c "scp -o StrictHostKeyChecking=no /tmp/lls.sh /tmp/epilog.sh /tmp/prolog.sh sge@${n}:${LOAD_SENSOR_DIR}"
+    sudo su - sge -c "scp -o StrictHostKeyChecking=no /tmp/lls.sh /tmp/sls.sh /tmp/epilog.sh /tmp/prolog.sh sge@${n}:${LOAD_SENSOR_DIR}"
     sudo su - sge -c "ssh $n 'bash -c \"mkdir -p $SCRATCH_ROOT; chmod a+wx $SCRATCH_ROOT; mkdir -p $SGE_LOCAL_STORAGE_ROOT; chmod a+wx $SGE_LOCAL_STORAGE_ROOT\"'"
   done
 }
@@ -65,6 +71,7 @@ if [ "$1" == '--force' ]; then
   clean
 fi
 
+# generate ssh key for sge user
 if [ ! -f $SGE_USER_HOME/.ssh/id_rsa.pub ]; then
   mkdir -p $SGE_USER_HOME/.ssh
   ssh-keygen -q -f $SGE_USER_HOME/.ssh/id_rsa -t rsa -N ''
@@ -75,7 +82,7 @@ else
   echo "ssh key for sge user already exists"
 fi
 
-
+# add manifest for installing ssh key for sge user
 if [ ! -f /etc/puppetlabs/code/environments/production/modules/sge_ssh_key/manifests/init.pp ]; then
   ssh_key=$(awk '{print $2}' $SGE_USER_HOME/.ssh/id_rsa.pub)
   mkdir -p /etc/puppetlabs/code/environments/production/modules/sge_ssh_key/manifests
@@ -94,7 +101,6 @@ else
 fi
 
 # add module to regular software profile (separate software profile may be created later)
-
 if ! grep sge_ssh_key /etc/puppetlabs/code/environments/production/data/tortuga-extra.yaml ; then
   cat >> /etc/puppetlabs/code/environments/production/data/tortuga-extra.yaml <<EOF
 classes:
@@ -105,9 +111,13 @@ else
   echo "sge puppet module is already in hiera"
 fi
 
+#install rsync
 if true; then
   sudo yum install rsync
   cat > /etc/rsyncd.conf <<EOF
+lock file = /var/run/rsync.lock
+log file = /var/log/rsyncd.log
+pid file = /var/run/rsyncd.pid
 [HOME]
         path = /home
         comment = home
@@ -172,8 +182,12 @@ fi
 
 # add complex
 add_complex $LOCAL_PATH_COMPLEX
-#add_complex $SYNC_BACK_COMPLEX_NAME
+add_complex $SHARED_PATH_COMPLEX
+
 # add prolog epilog and load sensor to existing nodes
 add_pro_epi_ls $(qconf -sel)
 
+# configure qsub wrapper script
+sed "s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|; s|%%SGE_LOCAL_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; s|%%SGE_SHARED_STORAGE_ROOT%%|$SGE_SHARED_STORAGE_ROOT|" $SCRIPT_DIR/qsub-wrapper.sh > $TORTUGA_ROOT/bin/qsub-wrapper.sh
+chmod a+x $TORTUGA_ROOT/bin/qsub-wrapper.sh
 
