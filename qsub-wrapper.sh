@@ -14,8 +14,10 @@ SGE_LOCAL_STORAGE_ROOT=%%SGE_LOCAL_STORAGE_ROOT%%
 SGE_SHARED_STORAGE_ROOT=%%SGE_SHARED_STORAGE_ROOT%%
 #SGE_LOCAL_STORAGE_ROOT=/tmp/sge_data
 #SGE_SHARED_STORAGE_ROOT=/tmp/sge_shared
-LOCAL_PATH_COMPLEX=path
-SHARED_PATH_COMPLEX=spath
+LOCAL_PATH_COMPLEX=%%LOCAL_PATH_COMPLEX%%
+LOCAL_PATH_BOOL_COMPLEX=%%LOCAL_PATH_BOOL_COMPLEX%%
+SHARED_PATH_COMPLEX=%%SHARED_PATH_COMPLEX%%
+SHARED_PATH_BOOL_COMPLEX=%%SHARED_PATH_BOOL_COMPLEX%%
 
 Usage() {
   echo "This qsub wrapper script allows submitting UGE job which requires data to be"
@@ -126,9 +128,11 @@ fi
 
 if [ "$dest_type" == "LOCAL" ]; then
   complex=$LOCAL_PATH_COMPLEX
+  complex_bool=$LOCAL_PATH_BOOL_COMPLEX
   export SGE_DATA_IN="$SGE_LOCAL_STORAGE_ROOT/$USER/$(echo $src_path | base64)"
 elif [ "$dest_type" == "SCRATCH" ]; then
   complex=$SHARED_PATH_COMPLEX
+  complex_bool=$SHARED_PATH_BOOL_COMPLEX
   export SGE_DATA_IN="$SGE_SHARED_STORAGE_ROOT/$USER/$(echo $src_path | base64)"
   SGE_DATA_IN_SRC=$src_path
 else
@@ -155,5 +159,6 @@ qsub -v SGE_DATA_IN=$SGE_DATA_IN \
      -v SGE_DATA_OUT=$SGE_DATA_OUT \
      -v SGE_DATA_OUT_BACK=$SGE_DATA_OUT_BACK \
      -v SGE_DATA_OUT_BACK_STORAGE=$SGE_DATA_OUT_BACK_STORAGE \
-     -soft -l $complex="*${src_path}*" -hard \
+     -soft -l $complex="*${src_path}*" \
+     -hard -l $complex_bool \
      "$@"

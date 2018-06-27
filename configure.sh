@@ -5,8 +5,10 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 SGE_USER_HOME=/home/sge
-LOCAL_PATH_COMPLEX=path
+LOCAL_PATH_COMPLEX=lpath
+LOCAL_PATH_BOOL_COMPLEX=lpath_bool
 SHARED_PATH_COMPLEX=spath
+SHARED_PATH_BOOL_COMPLEX=spath_bool
 LOAD_SENSOR_DIR=$SGE_ROOT/setup
 # remote cluster exec node local data directory
 SGE_LOCAL_STORAGE_ROOT=/tmp/sge_data
@@ -25,7 +27,9 @@ clean() {
 
 add_complex() {
   local nm=$1
-  COMPLEX_STR="$nm $nm RESTRING == YES NO NONE 0 NO"
+  local type=$2
+  local default=${3:-NONE}
+  COMPLEX_STR="$nm $nm $type == YES NO $default 0 NO"
   TMP_COMPLEX_FILE=/tmp/complex
   qconf -sc > $TMP_COMPLEX_FILE
   if ! grep '$COMPLEX_STR' $TMP_COMPLEX_FILE ; then
@@ -38,6 +42,7 @@ add_complex() {
 
 add_pro_epi_ls() {
   local nodes="$@"
+  #
   # prepare load sensor
   sed "s|%%SGE_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; s|%%SGE_COMPLEX_NAME%%|$LOCAL_PATH_COMPLEX|" $SCRIPT_DIR/load-sensor.sh > /tmp/lls.sh
   chmod a+x /tmp/lls.sh
@@ -62,7 +67,10 @@ add_pro_epi_log() {
   for n in $(qconf -sel); do
     sudo su - sge -c "scp -o StrictHostKeyChecking=no $tmpsf sge@${n}:${LOAD_SENSOR_DIR}"
   done
-  qconf -mattr queue $pro_epi $LOAD_SENSOR_DIR/$sf all.q
+  # queue level
+#  qconf -mattr queue $pro_epi $LOAD_SENSOR_DIR/$sf all.q
+  # execd level
+#  qconf -mconf node
 }
 
 FORCE=0
@@ -181,13 +189,35 @@ fi
 fi
 
 # add complex
-add_complex $LOCAL_PATH_COMPLEX
-add_complex $SHARED_PATH_COMPLEX
+add_complex $LOCAL_PATH_COMPLEX RESTRING
+add_complex $LOCAL_PATH_BOOL_COMPLEX BOOL 0
+add_complex $SHARED_PATH_COMPLEX RESTRING
+add_complex $SHARED_PATH_BOOL_COMPLEX BOOL 0
 
 # add prolog epilog and load sensor to existing nodes
-add_pro_epi_ls $(qconf -sel)
+#add_pro_epi_ls $(qconf -sel)
 
 # configure qsub wrapper script
-sed "s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|; s|%%SGE_LOCAL_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; s|%%SGE_SHARED_STORAGE_ROOT%%|$SGE_SHARED_STORAGE_ROOT|" $SCRIPT_DIR/qsub-wrapper.sh > $TORTUGA_ROOT/bin/qsub-wrapper.sh
+sed "s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|; \
+     s|%%SGE_LOCAL_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; \
+     s|%%SGE_SHARED_STORAGE_ROOT%%|$SGE_SHARED_STORAGE_ROOT|; \
+     s|%%LOCAL_PATH_COMPLEX%%|$LOCAL_PATH_COMPLEX|; \
+     s|%%LOCAL_PATH_BOOL_COMPLEX%%|$LOCAL_PATH_BOOL_COMPLEX|; \
+     s|%%SHARED_PATH_COMPLEX%%|$SHARED_PATH_COMPLEX|; \
+     s|%%SHARED_PATH_BOOL_COMPLEX%%|$SHARED_PATH_BOOL_COMPLEX|" \
+     $SCRIPT_DIR/qsub-wrapper.sh > $TORTUGA_ROOT/bin/qsub-wrapper.sh
 chmod a+x $TORTUGA_ROOT/bin/qsub-wrapper.sh
 
+# configure scale script
+sed "s|%%LOCAL_PATH_COMPLEX%%|$LOCAL_PATH_COMPLEX|; \
+     s|%%LOCAL_PATH_BOOL_COMPLEX%%|$LOCAL_PATH_BOOL_COMPLEX|; \
+     s|%%SHARED_PATH_COMPLEX%%|$SHARED_PATH_COMPLEX|; \
+     s|%%SHARED_PATH_BOOL_COMPLEX%%|$SHARED_PATH_BOOL_COMPLEX|" \
+     $SCRIPT_DIR/scale-up.sh > $TORTUGA_ROOT/bin/scale-up.sh
+chmod a+x $TORTUGA_ROOT/bin/scale-up.sh
+
+# copy load sensor template and prolog/epilog to Tortuga bin dir
+cp $SCRIPT_DIR/load-sensor.sh \
+   $SCRIPT_DIR/prolog.sh \
+   $SCRIPT_DIR/epilog.sh \
+   $TORTUGA_ROOT/bin

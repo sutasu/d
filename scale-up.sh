@@ -15,8 +15,10 @@ TORTUGA_ROOT=/opt/tortuga
 HARDWARE_PROFILE=aws
 SOFTWARE_PROFILE=execd
 SLOTS_ON_EXECD=2
-LOCAL_PATH_COMPLEX=path
-SHARED_PATH_COMPLEX=spath
+LOCAL_PATH_COMPLEX=%%LOCAL_PATH_COMPLEX%%
+LOCAL_PATH_BOOL_COMPLEX=%%LOCAL_PATH_BOOL_COMPLEX%%
+SHARED_PATH_COMPLEX=%%SHARED_PATH_COMPLEX%%
+SHARED_PATH_BOOL_COMPLEX=%%SHARED_PATH_BOOL_COMPLEX%%
 #SYNC_BACK_PATH_COMPLEX=sync_back
 SYNC_BACK_ENV_VAR=SYNC_BACK
 # local data storage on remote compute nodes
@@ -28,6 +30,63 @@ SCRATCH_ROOT=/tmp/sge_shared
 RSYNCD_HOST=$(hostname)
 #RSYNCD_HOST=%%RSYNCD_HOST%%
 #RSYNC="sudo su - sge -c "
+
+# bash >= 4.3 can pass arrays by reference but for now
+# pass arrays as strings
+upload_data() {
+#  local -n nodes=$1
+#  local -n ssh_available=$2
+#  local -n from=$3
+#  local -n to=$4
+  local nodes=( $(echo "$1") )
+  local ssh_available=( $(echo "$2") )
+  local from=( $(echo "$3") )
+  local to=( $(echo "$4") )
+  local node_cnt=0
+
+  for ((data_cnt=0; data_cnt<${#from[@]}; data_cnt++)) {
+    if [ $node_cnt -ge ${#nodes[@]} ]; then
+      node_cnt=0
+    fi
+    echo "data_cnt=$data_cnt, node_cnt=$node_cnt"
+    node=${nodes[$node_cnt]}
+    if [ ${ssh_available[$node_cnt]} -eq 0 ]; then
+      echo "Checking if ssh is available for $node"
+      sudo su - sge -c "ssh -q -o \"BatchMode=yes\" -o \"ConnectTimeout=5\" sge@$node \"echo 2>&1\""
+      if [ $? -ne 0 ]; then
+        echo "ssh not available on $node yet"
+        data_cnt=$((data_cnt - 1))
+        node_cnt=$((node_cnt + 1))
+        sleep 5
+        continue
+      else
+        ssh_available[$node_cnt]=1
+        echo "ssh available on $node"
+      fi
+    fi
+    data_path=${from[$data_cnt]}
+    path_to=${to[$data_cnt]}
+    if [ $ASYNC -eq 1 ]; then
+      rsync -avzhe "ssh -o StrictHostKeyChecking=no" \
+        --rsync-path="mkdir -p $SGE_LOCAL_STORAGE_ROOT/$path_to && rsync" \
+        $data_path sge@$node:$path_to/ &
+      RSYNC_PIDS+=($!)
+    else
+      echo "Transferring data from $data_path to sge@$node:$path_to/"
+      #cm="Dgo+s,ugo+w,Fgo+w,+X"
+      cm="ugo+w"
+      sudo su - sge -c "rsync --no-p --no-g --chmod=$cm -avzhe \"ssh -o StrictHostKeyChecking=no\" \
+        --rsync-path=\"mkdir -p $path_to && chmod a+rwx $(dirname $path_to) && rsync\" \
+        $data_path/* sge@$node:$path_to/"
+      ret=$?
+      if [ $ret -ne 0 ]; then
+        echo "error code from rsync: $ret"
+      fi
+    fi
+    node_cnt=$((node_cnt + 1))
+  }
+}
+
 
 ASYNC=0
 RSYNC_PIDS=()
@@ -71,23 +130,23 @@ if [ $total_slots -le 0 ]; then
   #qstat -f | awk '/all.q/ {printf("%s %s",$1,$3)}' | 
 fi
 
-new_nodes=$((total_slots / SLOTS_ON_EXECD))
-extra=$((total_slots - new_nodes * SLOTS_ON_EXECD))
+new_nodes_cnt=$((total_slots / SLOTS_ON_EXECD))
+extra=$((total_slots - new_nodes_cnt * SLOTS_ON_EXECD))
 echo "extra=$extra"
 if [ $extra -gt 0 ]; then
-  new_nodes=$((new_nodes + 1))
+  new_nodes_cnt=$((new_nodes + 1))
 fi
-echo "new_nodes=$new_nodes"
+echo "new_nodes_cnt=$new_nodes_cnt"
 
 if false; then
-  echo "Adding $new_nodes new nodes"
+  echo "Adding $new_nodes_cnt new nodes"
   ret=0
 else
   request_id=$(set -o pipefail; \
     $TORTUGA_ROOT/bin/add-nodes \
       --software-profile $SOFTWARE_PROFILE \
       --hardware-profile $HARDWARE_PROFILE \
-      --count $new_nodes | \
+      --count $new_nodes_cnt | \
     awk -F[ '{print $2}' | awk -F] '{print $1}')
   ret=$?
 fi
@@ -97,9 +156,11 @@ if [ $ret -ne 0 ]; then
   exit 1
 fi
 
-job_ids_with_data=()
-paths_from=()
-paths_to=()
+#job_ids_with_data=()
+paths_from_local=()
+paths_from_shared=()
+paths_to_local=()
+paths_to_shared=()
 for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
   job_id=${job_ids[$cnt]}
   user=${users[$cnt]}
@@ -134,11 +195,11 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
       else
         echo "Unexpected type: $t"
       fi
-      paths_from+=($lpath)
+      paths_from_local+=($lpath)
 #      path_to="${path//\//_}"
       path_to=$SGE_LOCAL_STORAGE_ROOT/$user/$(echo $path | base64)
-      paths_to+=($path_to)
-      job_ids_with_data+=($job_id)
+      paths_to_local+=($path_to)
+#      job_ids_with_data+=($job_id)
       if [[ ! $env_list = *"SGE_DATA_IN"* ]]; then
         qalter_params="$qalter_params -adds v SGE_DATA_IN $path_to"
       fi
@@ -158,10 +219,10 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
       else
         echo "Unexpected type: $t"
       fi
-      paths_from+=($lpath)
+      paths_from_shared+=($lpath)
       path_to=$SGE_SHARED_STORAGE_ROOT/$user/$(echo $path | base64)
-      paths_to+=($path_to)
-      job_ids_with_data+=($job_id)
+      paths_to_shared+=($path_to)
+#      job_ids_with_data+=($job_id)
       if [[ ! $env_list = *"SGE_DATA_IN"* ]]; then
         qalter_params="$qalter_params -adds v SGE_DATA_IN $path_to"
       fi
@@ -203,74 +264,69 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
 #done
 }
 
-echo "job_ids_with_data=${job_ids_with_data[@]}"
-echo "paths_from=${paths_from[@]}"
-echo "paths_to=${paths_to[@]}"
-  
+#echo "job_ids_with_data=${job_ids_with_data[@]}"
+echo "paths_from_local=${paths_from_local[@]}"
+echo "paths_to_local=${paths_to_local[@]}"
+echo "paths_from_shared=${paths_from_shared[@]}"
+echo "paths_to_shared=${paths_to_shared[@]}"
+
+# check if any nodes with shared storage type are available
+# to accept data transfer
+if [ ${#paths_to_shared[@]} -gt 0 ]; then
+  nodes_with_shared=()
+  for h in $(qconf -sel); do
+    if qconf -se $h | grep $SHARED_PATH_BOOL_COMPLEX ; then
+      nodes_with_shared+=(h)
+    fi
+  done
+  echo "nodes_with_shared=${nodes_with_shared[@]}"
+  ssh_available=($(for i in $(seq 1 ${#nodes_with_shared[@]}); do echo 1; done))
+
+# before bash 4.3
+  upload_data "$(echo ${nodes_with_shared[@]})" \
+              "$(echo ${ssh_available[@]})" \
+              "$(echo ${paths_from_shared[@]})" \
+              "$(echo ${paths_to_shared[@]})"
+#  upload_data nodes_with_shared ssh_available paths_from_shared paths_to_shared
+else
+  echo "No nodes with shared storage type available"
+fi
+
 while get-node-requests -r $request_id | fgrep pending ; do
   echo "Waiting for nodes to boot"
   sleep 1
 done
 
-
-data_total=${#paths_from[@]}
 new_nodes=($(get-node-requests -r $request_id | tail -n +2))
-
-new_nodes_total=${#new_nodes[@]}
-ssh_available=($(for i in $(seq 1 $new_nodes_total); do echo 0; done))
-node_cnt=0
-
-# transfer data
-for ((data_cnt=0; data_cnt<data_total; data_cnt++)) {
-  if [ $node_cnt -ge $new_nodes_total ]; then
-    node_cnt=0
-  fi
-  echo "data_cnt=$data_cnt, node_cnt=$node_cnt"
-  node=${new_nodes[$node_cnt]}
-  if [ ${ssh_available[$node_cnt]} -eq 0 ]; then
-    echo "Checking if ssh is available for $node"
-    sudo su - sge -c "ssh -q -o \"BatchMode=yes\" -o \"ConnectTimeout=5\" sge@$node \"echo 2>&1\""
-    if [ $? -ne 0 ]; then
-      echo "ssh not available on $node yet"
-      data_cnt=$((data_cnt - 1))
-      node_cnt=$((node_cnt + 1))
-      sleep 5
-      continue
-    else
-      ssh_available[$node_cnt]=1
-      echo "ssh available on $node"
-    fi
-  fi
-  data_path=${paths_from[$data_cnt]}
-  path_to=${paths_to[$data_cnt]}
-  if [ $ASYNC -eq 1 ]; then
-    rsync -avzhe "ssh -o StrictHostKeyChecking=no" \
-      --rsync-path="mkdir -p $SGE_LOCAL_STORAGE_ROOT/$path_to && rsync" \
-      $data_path sge@$node:$path_to/ &
-    RSYNC_PIDS+=($!)
-  else
-    echo "Transferring data from $data_path to sge@$node:$path_to/"
-    #cm="Dgo+s,ugo+w,Fgo+w,+X"
-    cm="ugo+w"
-    sudo su - sge -c "rsync --no-p --no-g --chmod=$cm -avzhe \"ssh -o StrictHostKeyChecking=no\" \
-      --rsync-path=\"mkdir -p $path_to && chmod a+rwx $(dirname $path_to) && rsync\" \
-      $data_path/* sge@$node:$path_to/"
-    ret=$?
-    if [ $ret -ne 0 ]; then
-      echo "error code from rsync: $ret"
-    fi
-  fi
-  node_cnt=$((node_cnt + 1))
-}
+ssh_available=($(for i in $(seq 1 ${#new_nodes[@]}); do echo 0; done))
+upload_data "$(echo ${new_nodes[@]})" \
+            "$(echo ${ssh_available[@]})" \
+            "$(echo ${paths_from_shared[@]} ${paths_from_local[@]})" \
+            "$(echo ${paths_to_shared[@]} ${paths_to_local[@]})"
+#upload_data new_nodes ssh_available paths_from_local paths_to_local
 
 # prepare load sensors and prolog/epilog
-sed "s|%%SGE_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; s|%%SGE_COMPLEX_NAME%%|$LOCAL_PATH_COMPLEX|; s|%%DEPTH%%|1|" $SCRIPT_DIR/load-sensor.sh > /tmp/lls.sh
+sed "s|%%SGE_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; \
+     s|%%SGE_COMPLEX_NAME%%|$LOCAL_PATH_COMPLEX|; \
+     s|%%SGE_BOOL_COMPLEX_NAME%%|$LOCAL_PATH_BOOL_COMPLEX|; \
+     s|%%DEPTH%%|1|" \
+     $SCRIPT_DIR/load-sensor.sh > /tmp/lls.sh
 chmod a+x /tmp/lls.sh
-sed "s|%%SGE_STORAGE_ROOT%%|$SCRATCH_ROOT|; s|%%SGE_COMPLEX_NAME%%|$SHARED_PATH_COMPLEX|; s|%%DEPTH%%|1|" $SCRIPT_DIR/load-sensor.sh > /tmp/sls.sh
+
+sed "s|%%SGE_STORAGE_ROOT%%|$SCRATCH_ROOT|; \
+     s|%%SGE_COMPLEX_NAME%%|$SHARED_PATH_COMPLEX|; \
+     s|%%SGE_BOOL_COMPLEX_NAME%%|$SHARED_PATH_BOOL_COMPLEX|; \
+     s|%%DEPTH%%|1|" $SCRIPT_DIR/load-sensor.sh > /tmp/sls.sh
 chmod a+x /tmp/sls.sh
-sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" $SCRIPT_DIR/epilog.sh > /tmp/epilog.sh
+
+sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; \
+     s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" \
+     $SCRIPT_DIR/epilog.sh > /tmp/epilog.sh
+
 chmod a+x /tmp/epilog.sh
-sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" $SCRIPT_DIR/prolog.sh > /tmp/prolog.sh
+sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; \
+     s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" \
+     $SCRIPT_DIR/prolog.sh > /tmp/prolog.sh
 chmod a+x /tmp/prolog.sh
 
 # wait for UGE become available on compute nodes
@@ -309,12 +365,14 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
       hf=/tmp/$node
       qconf -sconf $node > $hf
       echo "load_sensor $LOAD_SENSOR_DIR/lls.sh,$LOAD_SENSOR_DIR/sls.sh" >> $hf
+      echo "prolog $LOAD_SENSOR_DIR/prolog.sh" >> $hf
+      echo "epilog $LOAD_SENSOR_DIR/epilog.sh" >> $hf
       # temporary change load sensor period to short value
       echo "load_report_time 5" >> $hf
       qconf -Mconf $hf
       # add epilog
-      qconf -mattr queue epilog $LOAD_SENSOR_DIR/epilog.sh all.q
-      qconf -mattr queue prolog $LOAD_SENSOR_DIR/prolog.sh all.q
+#      qconf -mattr queue epilog $LOAD_SENSOR_DIR/epilog.sh all.q
+#      qconf -mattr queue prolog $LOAD_SENSOR_DIR/prolog.sh all.q
     else
       echo "UGE on $node is still in 'u' state"
       tmp+=($node)
