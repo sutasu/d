@@ -76,6 +76,7 @@ upload_data() {
   log "  ssh_available=${ssh_available[@]}"
   log "  from=${from[@]}"
   log "  to=${to[@]}"
+  out "Waiting to start data transfer..."
   for ((data_cnt=0; data_cnt<${#from[@]}; data_cnt++)) {
     if [ $node_cnt -ge ${#nodes[@]} ]; then
       node_cnt=0
@@ -83,10 +84,11 @@ upload_data() {
     log "data_cnt=$data_cnt, node_cnt=$node_cnt"
     node=${nodes[$node_cnt]}
     if [ ${ssh_available[$node_cnt]} -eq 0 ]; then
-      out "Checking if ssh is available for $node"
+      progress
+      log "Checking if ssh is available for $node"
       sudo su - sge -c "ssh -q -o \"BatchMode=yes\" -o \"ConnectTimeout=5\" sge@$node \"echo 2>&1\""
       if [ $? -ne 0 ]; then
-        out "ssh not available on $node yet"
+        log "ssh not available on $node yet"
         data_cnt=$((data_cnt - 1))
         node_cnt=$((node_cnt + 1))
         sleep 5
@@ -327,7 +329,7 @@ else
 fi
 
 out "Waiting for nodes to boot..."
-while get-node-requests -r $request_id | fgrep pending ; do
+while get-node-requests -r $request_id | fgrep -q pending ; do
   progress
   sleep 1
 done
@@ -372,15 +374,16 @@ max_err_cnt=120
 #max_err_cnt=$((10 * new_nodes_total))
 err_cnt=0
 new_nodes_copy=("${new_nodes[@]}")
+out "Waiting for UGE become available on nodes: ${new_nodes[@]}"
 for((cnt=0;cnt<max_cnt;++cnt)) { 
   tmp=()
   for node in ${new_nodes_copy[@]}; do
-    out "Waiting for UGE on $node"
+    log "Waiting for UGE on $node"
     node_short=${node%%.*}
   #  for((i=0;i<new_nodes_total;++i)); do
 #    if [ -z "$(qstat -f | grep $node)" ]; then
-    if ! qstat -f | grep $node_short ; then
-      out "No execd on $node yet"
+    if ! qstat -f | fgrep -q $node_short ; then
+      log "No execd on $node yet"
       err_cnt=$((err_cnt + 1))
       if [ $err_cnt -gt $max_err_cnt ]; then
         out "Too many attempts waiting for UGE become ready on $node"
@@ -390,8 +393,8 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
       continue
     fi
 #    if [ -z "$(qstat -f -qs u | grep $node)" ]; then
-    if ! qstat -f -qs u | grep $node_short ; then
-      out "Adding load sensor and epilog on $node"
+    if ! qstat -f -qs u | fgrep -q $node_short ; then
+      out "Node $node available"
       # copy load sensor and epilog
       sudo su - sge -c "scp -o StrictHostKeyChecking=no /tmp/lls.sh /tmp/sls.sh /tmp/epilog.sh /tmp/prolog.sh sge@${node}:${LOAD_SENSOR_DIR}"
       ret=$?
@@ -410,12 +413,13 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
 #      qconf -mattr queue epilog $LOAD_SENSOR_DIR/epilog.sh all.q
 #      qconf -mattr queue prolog $LOAD_SENSOR_DIR/prolog.sh all.q
     else
-      out "UGE on $node is still in 'u' state"
+      progress
+      log "UGE on $node is still in 'u' state"
       tmp+=($node)
     fi
   done
   if [ ${#tmp[@]} -eq 0 ]; then
-    out "All UGE nodes ready"
+    out "All UGE new compute nodes ready"
     break
   fi
   new_nodes_copy=(${tmp[@]})
