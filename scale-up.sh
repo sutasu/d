@@ -34,14 +34,14 @@ RSYNCD_HOST=$(hostname)
 #RSYNC="sudo su - sge -c "
 
 out() {
- echo "$@" | tee -a "$LOG_FILE" >&2
+ echo "$(date +%F-%H-%M-%S.%3N): $@" | tee -a "$LOG_FILE" >&2
 }
 
 log() {
  if [ $VERBOSE -eq 1 ]; then
    Out "$@"
  else
-   echo "$@" >> "$LOG_FILE"
+   echo "$(date +%F-%H-%M-%S.%3N): $@" >> "$LOG_FILE"
  fi
 }
 
@@ -191,7 +191,6 @@ if [ $ret -ne 0 ]; then
   exit 1
 fi
 
-#job_ids_with_data=()
 paths_from_local=()
 paths_from_shared=()
 paths_to_local=()
@@ -199,9 +198,7 @@ paths_to_shared=()
 for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
   job_id=${job_ids[$cnt]}
   user=${users[$cnt]}
-#for job_id in ${job_ids[@]}; do
-#  jarr=($(qstat -j $job_id | awk -F': ' '/hard resource_list|env_list/ {print $2}'))
-  # expects soft resource list to be there (as summlies by qsub-wrapper.sh)
+  # expects soft resource list to be there (as supplied by qsub-wrapper.sh)
   jarr=($(set -o pipefail; qstat -j $job_id | awk -F': ' '/soft resource_list|env_list/ {print $2}'))
   if [ $? -ne 0 ]; then
     out "ERROR: from qstat for job id: $job_id"
@@ -215,7 +212,6 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
   qalter_add_hard=
   for hl in ${resource_list_arr[@]}; do
     if [[ $hl = "$LOCAL_PATH_COMPLEX"* ]]; then
-#      path="${hl##*=}"
       qalter_params="$qalter_params -clears l_soft $LOCAL_PATH_COMPLEX"
       qalter_add_hard_key="-adds l_hard $LOCAL_PATH_COMPLEX"
       qalter_add_hard_val="${hl##*=}"
@@ -231,10 +227,8 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
         out "Unexpected type: $t"
       fi
       paths_from_local+=($lpath)
-#      path_to="${path//\//_}"
       path_to=$SGE_LOCAL_STORAGE_ROOT/$user/$(echo $path | base64)
       paths_to_local+=($path_to)
-#      job_ids_with_data+=($job_id)
       if [[ ! $env_list = *"SGE_DATA_IN"* ]]; then
         qalter_params="$qalter_params -adds v SGE_DATA_IN $path_to"
       fi
@@ -257,7 +251,6 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
       paths_from_shared+=($lpath)
       path_to=$SGE_SHARED_STORAGE_ROOT/$user/$(echo $path | base64)
       paths_to_shared+=($path_to)
-#      job_ids_with_data+=($job_id)
       if [[ ! $env_list = *"SGE_DATA_IN"* ]]; then
         qalter_params="$qalter_params -adds v SGE_DATA_IN $path_to"
       fi
@@ -297,10 +290,8 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
     log "qalter $qalter_params $job_id"
     qalter $qalter_params $job_id
   fi
-#done
 }
 
-#echo "job_ids_with_data=${job_ids_with_data[@]}"
 log "paths_from_local=${paths_from_local[@]}"
 log "paths_to_local=${paths_to_local[@]}"
 log "paths_from_shared=${paths_from_shared[@]}"
@@ -380,8 +371,6 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
   for node in ${new_nodes_copy[@]}; do
     log "Waiting for UGE on $node"
     node_short=${node%%.*}
-  #  for((i=0;i<new_nodes_total;++i)); do
-#    if [ -z "$(qstat -f | grep $node)" ]; then
     if ! qstat -f | fgrep -q $node_short ; then
       log "No execd on $node yet"
       err_cnt=$((err_cnt + 1))
@@ -392,7 +381,6 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
       tmp+=($node)
       continue
     fi
-#    if [ -z "$(qstat -f -qs u | grep $node)" ]; then
     if ! qstat -f -qs u | fgrep -q $node_short ; then
       out "Node $node available"
       # copy load sensor and epilog
@@ -409,9 +397,6 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
       # temporary change load sensor period to short value
       echo "load_report_time 5" >> $hf
       qconf -Mconf $hf
-      # add epilog
-#      qconf -mattr queue epilog $LOAD_SENSOR_DIR/epilog.sh all.q
-#      qconf -mattr queue prolog $LOAD_SENSOR_DIR/prolog.sh all.q
     else
       progress
       log "UGE on $node is still in 'u' state"

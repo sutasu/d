@@ -7,7 +7,9 @@ UGE cluster with Tortuga on AWS with at least one compute node.
 
 - run configuration script as `root`:
 
-`# ./configure.sh`
+```
+# ./configure.sh
+```
 
 It will install `qsub-wrapper.sh` and `scale-up.sh` scripts to Tortuga binary directory.
 
@@ -57,6 +59,7 @@ $ qsub-wrapper.sh -src HOME/input1 -dest LOCAL -sync-back /home/$USER/out1:HOME/
 With no other pending jobs the new job will start on the node with data (`infile1`) already present.
 
 - observe outout:
+
 ```
 $ ls ~/out1
 infile1  job.sh.o<job_id>  newfile99
