@@ -10,6 +10,8 @@
 
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+LOG_FILE=/tmp/scale-up.log
+VERBOSE=0
 QUEUE=all.q
 TORTUGA_ROOT=/opt/tortuga
 HARDWARE_PROFILE=aws
@@ -31,6 +33,32 @@ RSYNCD_HOST=$(hostname)
 #RSYNCD_HOST=%%RSYNCD_HOST%%
 #RSYNC="sudo su - sge -c "
 
+out() {
+ echo "$@" | tee -a "$LOG_FILE" >&2
+}
+
+log() {
+ if [ $VERBOSE -eq 1 ]; then
+   Out "$@"
+ else
+   echo "$@" >> "$LOG_FILE"
+ fi
+}
+
+SPINNER='/-\|'
+SPINNER_LEN=${#SPINNER}
+DOT_PROGRESS=yes
+
+progress() {
+  local cnt=$1
+  if [ -z $DOT_PROGRESS ]; then
+    printf "%s\r" "$cnt ${SPINNER:cnt%SPINNER_LEN:1}"
+  else
+    echo -n "."
+  fi
+}
+
+
 # bash >= 4.3 can pass arrays by reference but for now
 # pass arrays as strings
 upload_data() {
@@ -43,25 +71,29 @@ upload_data() {
   local from=( $(echo "$3") )
   local to=( $(echo "$4") )
   local node_cnt=0
-
+  log "Upload data:"
+  log "  nodes=${nodes[@]}"
+  log "  ssh_available=${ssh_available[@]}"
+  log "  from=${from[@]}"
+  log "  to=${to[@]}"
   for ((data_cnt=0; data_cnt<${#from[@]}; data_cnt++)) {
     if [ $node_cnt -ge ${#nodes[@]} ]; then
       node_cnt=0
     fi
-    echo "data_cnt=$data_cnt, node_cnt=$node_cnt"
+    log "data_cnt=$data_cnt, node_cnt=$node_cnt"
     node=${nodes[$node_cnt]}
     if [ ${ssh_available[$node_cnt]} -eq 0 ]; then
-      echo "Checking if ssh is available for $node"
+      out "Checking if ssh is available for $node"
       sudo su - sge -c "ssh -q -o \"BatchMode=yes\" -o \"ConnectTimeout=5\" sge@$node \"echo 2>&1\""
       if [ $? -ne 0 ]; then
-        echo "ssh not available on $node yet"
+        out "ssh not available on $node yet"
         data_cnt=$((data_cnt - 1))
         node_cnt=$((node_cnt + 1))
         sleep 5
         continue
       else
         ssh_available[$node_cnt]=1
-        echo "ssh available on $node"
+        out "ssh available on $node"
       fi
     fi
     data_path=${from[$data_cnt]}
@@ -72,7 +104,7 @@ upload_data() {
         $data_path sge@$node:$path_to/ &
       RSYNC_PIDS+=($!)
     else
-      echo "Transferring data from $data_path to sge@$node:$path_to/"
+      out "Transferring data from $data_path to sge@$node:$path_to/"
       #cm="Dgo+s,ugo+w,Fgo+w,+X"
       cm="ugo+w"
       sudo su - sge -c "rsync --no-p --no-g --chmod=$cm -avzhe \"ssh -o StrictHostKeyChecking=no\" \
@@ -80,66 +112,67 @@ upload_data() {
         $data_path/* sge@$node:$path_to/"
       ret=$?
       if [ $ret -ne 0 ]; then
-        echo "error code from rsync: $ret"
+        out "error code from rsync: $ret"
       fi
     fi
     node_cnt=$((node_cnt + 1))
   }
 }
 
+log "Start: "${BASH_SOURCE[@]}""
 
 ASYNC=0
 RSYNC_PIDS=()
 
 job_ids=(${1//,/ })
 #IFS=',' read -ra job_ids <<< $1
-echo "job_ids=${job_ids[@]}"
+log "job_ids=${job_ids[@]}"
 job_cnt=${#job_ids[@]}
-echo "job_cnt=$job_cnt"
+log "job_cnt=$job_cnt"
 
 slots=(${2//,/ })
-echo "slots=${slots[@]}"
+log "slots=${slots[@]}"
 slot_cnt=${#slots[@]}
-echo "slot_cnt=$slot_cnt"
+log "slot_cnt=$slot_cnt"
 
 if [ $job_cnt -ne $slot_cnt ]; then
-  echo "Job and slot arrays has different sizes: $job_cnt!=$slot_cnt"
+  out "Job and slot arrays has different sizes: $job_cnt!=$slot_cnt"
   exit 1
 fi
 
 users=(${3//,/ })
-echo "users=${users[@]}"
+log "users=${users[@]}"
 
 free_slots_array=(${4//,/ })
 free_slots=0
 for s in ${free_slots_array[@]}; do
   free_slots=$((free_slots + s))
 done
-echo "free_slots: $free_slots"
+log "free_slots: $free_slots"
 
 total_slots=0
 for s in ${slots[@]}; do
   total_slots=$((total_slots + s))
 done
-echo "total_slots requested buy jobs: $total_slots"
+out "Total slots requested buy jobs: $total_slots"
 
 total_slots=$((total_slots - free_slots))
 if [ $total_slots -le 0 ]; then
-  echo "Do not scale up, new slots requested: $total_slots, already available: $free_slots"
+  out "Do not scale up, new slots requested: $total_slots, already available: $free_slots"
   # get nodes with free slots
   #qstat -f | awk '/all.q/ {printf("%s %s",$1,$3)}' | 
 fi
 
 new_nodes_cnt=$((total_slots / SLOTS_ON_EXECD))
 extra=$((total_slots - new_nodes_cnt * SLOTS_ON_EXECD))
-echo "extra=$extra"
+log "extra=$extra"
 if [ $extra -gt 0 ]; then
   new_nodes_cnt=$((new_nodes + 1))
 fi
-echo "new_nodes_cnt=$new_nodes_cnt"
+
+echo "Adding $new_nodes_cnt new nodes"
 
 if false; then
-  echo "Adding $new_nodes_cnt new nodes"
   ret=0
 else
   request_id=$(set -o pipefail; \
@@ -152,7 +185,7 @@ else
 fi
 
 if [ $ret -ne 0 ]; then
-  echo "Error: add-nodes returned: $ret"
+  out "Error: add-nodes returned: $ret"
   exit 1
 fi
 
@@ -169,7 +202,7 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
   # expects soft resource list to be there (as summlies by qsub-wrapper.sh)
   jarr=($(set -o pipefail; qstat -j $job_id | awk -F': ' '/soft resource_list|env_list/ {print $2}'))
   if [ $? -ne 0 ]; then
-    echo "ERROR: from qstat for job id: $job_id"
+    out "ERROR: from qstat for job id: $job_id"
     continue
   fi
   resource_list=${jarr[0]}
@@ -193,7 +226,7 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
       elif [ "$t" == "SCRATCH" ]; then
         lpath="$SCRATCH_ROOT/$path"
       else
-        echo "Unexpected type: $t"
+        out "Unexpected type: $t"
       fi
       paths_from_local+=($lpath)
 #      path_to="${path//\//_}"
@@ -217,7 +250,7 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
       elif [ "$t" == "SCRATCH" ]; then
         lpath="$SCRATCH_ROOT/$path"
       else
-        echo "Unexpected type: $t"
+        out "Unexpected type: $t"
       fi
       paths_from_shared+=($lpath)
       path_to=$SGE_SHARED_STORAGE_ROOT/$user/$(echo $path | base64)
@@ -231,7 +264,7 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
   done
   for el in ${env_list_arr[@]}; do
     if [[ $el = "$SYNC_BACK_ENV_VAR="* ]]; then
-      echo "sync_back: $el"
+      log "sync_back: $el"
       path="${el#*=}"
       path_from="${path%%:*}"
       if [ ! -z "$path_from" ]; then
@@ -244,7 +277,7 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
           to="${path_to#SCRATCH/}"
           path_to="SCRATCH/$to"
         else
-          echo "HOME or SCRATCH specifier expected in $SYNC_BACK_ENV_VAR"
+          out "HOME or SCRATCH specifier expected in $SYNC_BACK_ENV_VAR"
           path_to=
         fi
         if [ ! -z "$path_to" ]; then
@@ -255,20 +288,21 @@ for ((cnt=0; cnt<${#job_ids[@]}; ++cnt)) {
     fi
   done
   if [ ! -z "$qalter_add_hard_key" ]; then
-    qalter $qalter_add_hard_key "$qalter_add_hard_val" $job_id
+    log "qalter $qalter_add_hard_key $qalter_add_hard_val $job_id"
+    qalter -p 1000 $qalter_add_hard_key "$qalter_add_hard_val" $job_id
   fi
   if [ ! -z "$qalter_params" ]; then
-    echo "qalter $qalter_params $job_id"
+    log "qalter $qalter_params $job_id"
     qalter $qalter_params $job_id
   fi
 #done
 }
 
 #echo "job_ids_with_data=${job_ids_with_data[@]}"
-echo "paths_from_local=${paths_from_local[@]}"
-echo "paths_to_local=${paths_to_local[@]}"
-echo "paths_from_shared=${paths_from_shared[@]}"
-echo "paths_to_shared=${paths_to_shared[@]}"
+log "paths_from_local=${paths_from_local[@]}"
+log "paths_to_local=${paths_to_local[@]}"
+log "paths_from_shared=${paths_from_shared[@]}"
+log "paths_to_shared=${paths_to_shared[@]}"
 
 # check if any nodes with shared storage type are available
 # to accept data transfer
@@ -279,7 +313,7 @@ if [ ${#paths_to_shared[@]} -gt 0 ]; then
       nodes_with_shared+=(h)
     fi
   done
-  echo "nodes_with_shared=${nodes_with_shared[@]}"
+  out "Nodes with shared storage type available: ${nodes_with_shared[@]}"
   ssh_available=($(for i in $(seq 1 ${#nodes_with_shared[@]}); do echo 1; done))
 
 # before bash 4.3
@@ -289,15 +323,17 @@ if [ ${#paths_to_shared[@]} -gt 0 ]; then
               "$(echo ${paths_to_shared[@]})"
 #  upload_data nodes_with_shared ssh_available paths_from_shared paths_to_shared
 else
-  echo "No nodes with shared storage type available"
+  out "No nodes with shared storage type available"
 fi
 
+out "Waiting for nodes to boot..."
 while get-node-requests -r $request_id | fgrep pending ; do
-  echo "Waiting for nodes to boot"
+  progress
   sleep 1
 done
 
 new_nodes=($(get-node-requests -r $request_id | tail -n +2))
+out "New nodes added: ${new_nodes[@]}"
 ssh_available=($(for i in $(seq 1 ${#new_nodes[@]}); do echo 0; done))
 upload_data "$(echo ${new_nodes[@]})" \
             "$(echo ${ssh_available[@]})" \
@@ -339,15 +375,15 @@ new_nodes_copy=("${new_nodes[@]}")
 for((cnt=0;cnt<max_cnt;++cnt)) { 
   tmp=()
   for node in ${new_nodes_copy[@]}; do
-    echo "Waiting for UGE on $node"
+    out "Waiting for UGE on $node"
     node_short=${node%%.*}
   #  for((i=0;i<new_nodes_total;++i)); do
 #    if [ -z "$(qstat -f | grep $node)" ]; then
     if ! qstat -f | grep $node_short ; then
-      echo "No execd on $node yet"
+      out "No execd on $node yet"
       err_cnt=$((err_cnt + 1))
       if [ $err_cnt -gt $max_err_cnt ]; then
-        echo "Too many attempts waiting for UGE become ready on $node"
+        out "Too many attempts waiting for UGE become ready on $node"
         continue
       fi
       tmp+=($node)
@@ -355,12 +391,12 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
     fi
 #    if [ -z "$(qstat -f -qs u | grep $node)" ]; then
     if ! qstat -f -qs u | grep $node_short ; then
-      echo "Adding load sensor and epilog on $node"
+      out "Adding load sensor and epilog on $node"
       # copy load sensor and epilog
       sudo su - sge -c "scp -o StrictHostKeyChecking=no /tmp/lls.sh /tmp/sls.sh /tmp/epilog.sh /tmp/prolog.sh sge@${node}:${LOAD_SENSOR_DIR}"
       ret=$?
       if [ $ret -ne 0 ]; then
-        echo "Error installing load sensor, prolog or epilog: scp exit code: $ret"
+        out "Error installing load sensor, prolog or epilog: scp exit code: $ret"
       fi
       hf=/tmp/$node
       qconf -sconf $node > $hf
@@ -374,24 +410,24 @@ for((cnt=0;cnt<max_cnt;++cnt)) {
 #      qconf -mattr queue epilog $LOAD_SENSOR_DIR/epilog.sh all.q
 #      qconf -mattr queue prolog $LOAD_SENSOR_DIR/prolog.sh all.q
     else
-      echo "UGE on $node is still in 'u' state"
+      out "UGE on $node is still in 'u' state"
       tmp+=($node)
     fi
   done
   if [ ${#tmp[@]} -eq 0 ]; then
-    echo "All UGE nodes ready"
+    out "All UGE nodes ready"
     break
   fi
   new_nodes_copy=(${tmp[@]})
   if [ $err_cnt -gt $max_err_cnt ]; then
-    echo "Too many attempts waiting for UGE become ready on new nodes"
+    out "Too many attempts waiting for UGE become ready on new nodes"
     break
   fi
   sleep 1
 }
 
 # wait default load sensor reporting interval
-echo "Waiting default load report interval"
+log "Waiting default load report interval"
 sleep 40
 # change back to default by removing it
 for node in ${new_nodes[@]}; do
@@ -401,3 +437,4 @@ for node in ${new_nodes[@]}; do
   qconf -Mconf $hf
 done
 
+log "End"
