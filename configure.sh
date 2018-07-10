@@ -4,6 +4,10 @@
 # add complexes
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+TORTUGA_SETUP_FILES_DIR=/etc/puppetlabs/code/environments/production/modules/tortuga_kit_uge/files/setup
+SW_PROFILE=execd
+#SW_PROFILE=default
+TORTUGA_SETUP_FILES_DM_CONFIG=$TORTUGA_SETUP_FILES_DIR/compute-conf/$SW_PROFILE
 SGE_USER_HOME=/home/sge
 LOCAL_PATH_COMPLEX=lpath
 LOCAL_PATH_BOOL_COMPLEX=lpath_bool
@@ -119,6 +123,34 @@ else
   echo "sge puppet module is already in hiera"
 fi
 
+# add manifest for creating data storage root directories
+if [ ! -f /etc/puppetlabs/code/environments/production/modules/storage/manifests/init.pp ]; then
+  mkdir -p /etc/puppetlabs/code/environments/production/modules/storage/manifests
+  cat > /etc/puppetlabs/code/environments/production/modules/storage/manifests/init.pp <<EOF
+class storage {
+  file { [ '$SGE_LOCAL_STORAGE_ROOT', '$SGE_SHARED_STORAGE_ROOT']:
+    ensure => 'directory',
+    owner  => 'sge',
+    group  => 'wheel',
+    mode   => '0777',
+  }
+}
+EOF
+else
+  echo "sge storage puppet module already exists"
+fi
+
+# add module create storage root directories to regular software profile (separate software profile may be created later)
+if ! grep storage /etc/puppetlabs/code/environments/production/data/tortuga-extra.yaml ; then
+  cat >> /etc/puppetlabs/code/environments/production/data/tortuga-extra.yaml <<EOF
+  - storage
+
+EOF
+else
+  echo "storage puppet module is already in hiera"
+fi
+
+
 #install rsync
 if true; then
   sudo yum install rsync
@@ -216,8 +248,32 @@ sed "s|%%LOCAL_PATH_COMPLEX%%|$LOCAL_PATH_COMPLEX|; \
      $SCRIPT_DIR/scale-up.sh > $TORTUGA_ROOT/bin/scale-up.sh
 chmod a+x $TORTUGA_ROOT/bin/scale-up.sh
 
-# copy load sensor template and prolog/epilog to Tortuga bin dir
-cp $SCRIPT_DIR/load-sensor.sh \
-   $SCRIPT_DIR/prolog.sh \
-   $SCRIPT_DIR/epilog.sh \
-   $TORTUGA_ROOT/bin
+# add load sensors and prolog/epilog to Tortuga stup files
+mkdir -p $TORTUGA_SETUP_FILES_DM_CONFIG/load_sensor \
+     $TORTUGA_SETUP_FILES_DM_CONFIG/prolog \
+     $TORTUGA_SETUP_FILES_DM_CONFIG/epilog
+
+sed "s|%%SGE_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; \
+     s|%%SGE_COMPLEX_NAME%%|$LOCAL_PATH_COMPLEX|; \
+     s|%%SGE_BOOL_COMPLEX_NAME%%|$LOCAL_PATH_BOOL_COMPLEX|; \
+     s|%%DEPTH%%|1|" \
+     $SCRIPT_DIR/load-sensor.sh > $TORTUGA_SETUP_FILES_DM_CONFIG/load_sensor/lls.sh
+chmod a+x $TORTUGA_SETUP_FILES_DM_CONFIG/load_sensor/lls.sh
+
+sed "s|%%SGE_STORAGE_ROOT%%|$SCRATCH_ROOT|; \
+     s|%%SGE_COMPLEX_NAME%%|$SHARED_PATH_COMPLEX|; \
+     s|%%SGE_BOOL_COMPLEX_NAME%%|$SHARED_PATH_BOOL_COMPLEX|; \
+     s|%%DEPTH%%|1|" \
+     $SCRIPT_DIR/load-sensor.sh > $TORTUGA_SETUP_FILES_DM_CONFIG/load_sensor/sls.sh
+chmod a+x $TORTUGA_SETUP_FILES_DM_CONFIG/load_sensor/sls.sh
+
+sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; \
+     s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" \
+     $SCRIPT_DIR/epilog.sh > $TORTUGA_SETUP_FILES_DM_CONFIG/epilog/epilog.sh
+chmod a+x $TORTUGA_SETUP_FILES_DM_CONFIG/epilog/epilog.sh
+
+sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; \
+     s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" \
+     $SCRIPT_DIR/prolog.sh > $TORTUGA_SETUP_FILES_DM_CONFIG/prolog/prolog.sh
+chmod a+x $TORTUGA_SETUP_FILES_DM_CONFIG/prolog/prolog.sh
+

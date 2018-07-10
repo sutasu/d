@@ -95,7 +95,7 @@ upload_data() {
         continue
       else
         ssh_available[$node_cnt]=1
-        out "ssh available on $node"
+        out "$node available for data transfer"
       fi
     fi
     data_path=${from[$data_cnt]}
@@ -319,11 +319,12 @@ else
   out "No nodes with shared storage type available"
 fi
 
-out "Waiting for nodes to boot..."
+out "Waiting for the node[s] to boot..."
 while get-node-requests -r $request_id | fgrep -q pending ; do
   progress
   sleep 1
 done
+out ""
 
 new_nodes=($(get-node-requests -r $request_id | tail -n +2))
 out "New nodes added: ${new_nodes[@]}"
@@ -333,97 +334,5 @@ upload_data "$(echo ${new_nodes[@]})" \
             "$(echo ${paths_from_shared[@]} ${paths_from_local[@]})" \
             "$(echo ${paths_to_shared[@]} ${paths_to_local[@]})"
 #upload_data new_nodes ssh_available paths_from_local paths_to_local
-
-# prepare load sensors and prolog/epilog
-sed "s|%%SGE_STORAGE_ROOT%%|$SGE_LOCAL_STORAGE_ROOT|; \
-     s|%%SGE_COMPLEX_NAME%%|$LOCAL_PATH_COMPLEX|; \
-     s|%%SGE_BOOL_COMPLEX_NAME%%|$LOCAL_PATH_BOOL_COMPLEX|; \
-     s|%%DEPTH%%|1|" \
-     $SCRIPT_DIR/load-sensor.sh > /tmp/lls.sh
-chmod a+x /tmp/lls.sh
-
-sed "s|%%SGE_STORAGE_ROOT%%|$SCRATCH_ROOT|; \
-     s|%%SGE_COMPLEX_NAME%%|$SHARED_PATH_COMPLEX|; \
-     s|%%SGE_BOOL_COMPLEX_NAME%%|$SHARED_PATH_BOOL_COMPLEX|; \
-     s|%%DEPTH%%|1|" $SCRIPT_DIR/load-sensor.sh > /tmp/sls.sh
-chmod a+x /tmp/sls.sh
-
-sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; \
-     s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" \
-     $SCRIPT_DIR/epilog.sh > /tmp/epilog.sh
-
-chmod a+x /tmp/epilog.sh
-sed "s|%%RSYNCD_HOST%%|$RSYNCD_HOST|; \
-     s|%%SCRATCH_ROOT%%|$SCRATCH_ROOT|" \
-     $SCRIPT_DIR/prolog.sh > /tmp/prolog.sh
-chmod a+x /tmp/prolog.sh
-
-# wait for UGE become available on compute nodes
-# install load sensor
-max_cnt=100
-max_err_cnt=120
-#max_err_cnt=$((10 * new_nodes_total))
-err_cnt=0
-new_nodes_copy=("${new_nodes[@]}")
-out "Waiting for UGE become available on nodes: ${new_nodes[@]}"
-for((cnt=0;cnt<max_cnt;++cnt)) { 
-  tmp=()
-  for node in ${new_nodes_copy[@]}; do
-    log "Waiting for UGE on $node"
-    node_short=${node%%.*}
-    if ! qstat -f | fgrep -q $node_short ; then
-      log "No execd on $node yet"
-      err_cnt=$((err_cnt + 1))
-      if [ $err_cnt -gt $max_err_cnt ]; then
-        out "Too many attempts waiting for UGE become ready on $node"
-        continue
-      fi
-      tmp+=($node)
-      continue
-    fi
-    if ! qstat -f -qs u | fgrep -q $node_short ; then
-      out "Node $node available"
-      # copy load sensor and epilog
-      sudo su - sge -c "scp -o StrictHostKeyChecking=no /tmp/lls.sh /tmp/sls.sh /tmp/epilog.sh /tmp/prolog.sh sge@${node}:${LOAD_SENSOR_DIR}"
-      ret=$?
-      if [ $ret -ne 0 ]; then
-        out "Error installing load sensor, prolog or epilog: scp exit code: $ret"
-      fi
-      hf=/tmp/$node
-      qconf -sconf $node > $hf
-      echo "load_sensor $LOAD_SENSOR_DIR/lls.sh,$LOAD_SENSOR_DIR/sls.sh" >> $hf
-      echo "prolog $LOAD_SENSOR_DIR/prolog.sh" >> $hf
-      echo "epilog $LOAD_SENSOR_DIR/epilog.sh" >> $hf
-      # temporary change load sensor period to short value
-      echo "load_report_time 5" >> $hf
-      qconf -Mconf $hf
-    else
-      progress
-      log "UGE on $node is still in 'u' state"
-      tmp+=($node)
-    fi
-  done
-  if [ ${#tmp[@]} -eq 0 ]; then
-    out "All UGE new compute nodes ready"
-    break
-  fi
-  new_nodes_copy=(${tmp[@]})
-  if [ $err_cnt -gt $max_err_cnt ]; then
-    out "Too many attempts waiting for UGE become ready on new nodes"
-    break
-  fi
-  sleep 1
-}
-
-# wait default load sensor reporting interval
-log "Waiting default load report interval"
-sleep 40
-# change back to default by removing it
-for node in ${new_nodes[@]}; do
-  hf=/tmp/$node
-  qconf -sconf $node > $hf
-  sed -i '/^load_report_time[ \t]*5.*/ d' $hf
-  qconf -Mconf $hf
-done
 
 log "End"
